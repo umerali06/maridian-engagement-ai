@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/learning-loop",
+      "schedule": "0 9 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/chat/route.ts": { "maxDuration": 60 },
+    "src/app/api/documents/upload/route.ts": { "maxDuration": 300 },
+    "src/app/api/cron/learning-loop/route.ts": { "maxDuration": 300 }
+  }
+}
