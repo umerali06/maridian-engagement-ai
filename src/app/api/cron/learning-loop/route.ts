@@ -48,12 +48,13 @@ export async function GET(req: NextRequest) {
         .from("messages")
         .select("role, content")
         .eq("conversation_id", conv.id)
-        .order("created_at", { ascending: true })
+        .order("created_at", { ascending: false })
         .limit(40);
 
       if (!msgs?.length) continue;
 
-      const transcript = msgs
+      const orderedMsgs = msgs.slice().reverse();
+      const transcript = orderedMsgs
         .map((m) => `[${m.role.toUpperCase()}] ${m.content}`)
         .join("\n");
 
