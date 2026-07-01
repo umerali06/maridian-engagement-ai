@@ -275,9 +275,22 @@ export async function POST(req: NextRequest) {
           user_message: message_text,
         }),
       });
-      if (!res.ok) console.error("[webhook] /api/chat non-2xx", res.status);
+      if (!res.ok) {
+        console.error("[webhook] /api/chat non-2xx", {
+          status: res.status,
+          conversation_id: conversationId,
+          message_id: inboundMessage.id,
+          brand_id: account.brand_id,
+          manychat_page_id,
+        });
+      }
     } catch (e) {
-      console.error("[webhook] /api/chat dispatch failed", e);
+      console.error("[webhook] /api/chat dispatch failed", {
+        error: e instanceof Error ? e.message : String(e),
+        conversation_id: conversationId,
+        message_id: inboundMessage.id,
+        brand_id: account.brand_id,
+      });
     }
   });
 
