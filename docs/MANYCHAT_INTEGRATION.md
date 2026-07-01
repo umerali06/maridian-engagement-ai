@@ -32,7 +32,7 @@ Inside the flow, add a single **Action: External Request**:
 |---|---|
 | Method | `POST` |
 | URL | `https://YOUR_DOMAIN.vercel.app/api/manychat/webhook` |
-| Headers | `Content-Type: application/json` |
+| Headers | `jorai: <MANYCHAT_WEBHOOK_SECRET>` |
 | Body type | JSON |
 | Body | (see below) |
 
@@ -77,23 +77,44 @@ values (
 );
 ```
 
-### 4. (Recommended) HMAC signing
+### 3a. Test the webhook without ManyChat UI
 
-Add an extra header in External Request:
+Local manual payload:
 
-```
-x-manychat-signature: {{external_request_body_hmac_sha256}}
-```
-
-(ManyChat doesn't natively compute HMAC of the body, so this is currently optional. If you want hard auth, gate the webhook by IP allowlist or a static `x-secret-header` instead.)
-
-For a simpler approach, add:
-
-```
-x-secret: paste-your-CRON_SECRET-here
+```bash
+APP_URL=http://localhost:3000 PAGE_ID=PASTE_PAGE_ID \
+  npx tsx scripts/test-webhook.ts "Hola, quiero info de Meridian"
 ```
 
-And in `webhook/route.ts`, also check this header. The repo currently uses HMAC; you can adapt.
+When testing the ManyChat UI through ngrok locally, set this in `.env.local`:
+
+```env
+INTERNAL_APP_URL=http://localhost:3000
+```
+
+ManyChat must call the public ngrok URL, but the local Next.js server should dispatch `/api/chat` through localhost.
+
+Production full-contact payload, matching the current ManyChat template:
+
+```bash
+APP_URL=https://meridian-engagement-ai.vercel.app \
+PAGE_ID=PASTE_PAGE_ID \
+MANYCHAT_WEBHOOK_SECRET=PASTE_SECRET \
+PAYLOAD_SHAPE=full_contact \
+  npx tsx scripts/test-webhook.ts "Hola, quiero info de Meridian"
+```
+
+Expected result: HTTP 200 with `conversation_id`, a new dashboard conversation, and either a delivered reply or a visible delivery failure in the conversation detail.
+
+### 4. Webhook authentication
+
+In production, the webhook requires `MANYCHAT_WEBHOOK_SECRET`. Configure it in ManyChat as:
+
+```
+jorai: paste-your-MANYCHAT_WEBHOOK_SECRET-here
+```
+
+The route also accepts `x-webhook-secret` or `?secret=` for manual testing, but `jorai` is the recommended ManyChat header because some `x-...` headers are rejected by ManyChat.
 
 ---
 
@@ -101,11 +122,11 @@ And in `webhook/route.ts`, also check this header. The repo currently uses HMAC;
 
 When Claude calls `handoff_to_human`, the backend:
 1. Updates the conversation status in Postgres.
-2. Adds a tag `needs_human` to the subscriber via ManyChat API.
+2. Optionally adds the configured tag from `MANYCHAT_HANDOFF_TAG` to the subscriber via ManyChat API.
 3. Sends a Telegram alert to ops.
 
 In ManyChat, set up a **Smart Delay → Live Chat** rule:
-- Trigger: tag added `needs_human`
+- Trigger: tag added `MANYCHAT_HANDOFF_TAG` (for example `needs_human`)
 - Action: open Live Chat conversation OR notify a specific user
 - Optional: pause all automations for this subscriber until tag removed
 
@@ -139,6 +160,35 @@ You can use these fields in ManyChat for:
 ## Multi-account, same brand
 
 A single brand can have multiple ManyChat accounts (IG + WA + FB). Each account gets its own row in `manychat_accounts` with its own API key + page ID. The webhook routes to the right brand based on incoming `manychat_page_id`.
+
+### Replicate for another Instagram account
+
+Ask the client for:
+
+- ManyChat Pro access for the account
+- ManyChat API token
+- ManyChat Page ID
+- Confirmation whether this account should use the existing `meridian` brand/persona or a separate brand prompt
+
+For another account using the existing Meridian brain:
+
+```bash
+npm run account:upsert -- \
+  --brand=meridian \
+  --platform=instagram \
+  --display="@deivin — Meridian" \
+  --page-id=PASTE_PAGE_ID \
+  --api-key=PASTE_MANYCHAT_API_TOKEN
+```
+
+Then replicate the same ManyChat automation:
+
+1. Create/live-enable the AI reply flow.
+2. Add External Request to `/api/manychat/webhook`.
+3. Add header `jorai: <MANYCHAT_WEBHOOK_SECRET>`.
+4. Use the same JSON body template.
+5. Set it as Instagram Default Reply.
+6. Send a real DM from a brand-new IG test account and verify a dashboard conversation appears.
 
 ## New brand, fresh deployment
 

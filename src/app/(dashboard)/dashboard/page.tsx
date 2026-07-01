@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
+import { estimateClaudeCost, formatCompactNumber, formatUsd } from "@/lib/costs";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,14 @@ export default async function DashboardPage() {
       supabase.from("learnings").select("id", { count: "exact", head: true }).eq("status", "pending"),
     ]);
 
+  const { data: usageRows } = await supabase
+    .from("messages")
+    .select("tokens_input, tokens_output, tokens_cache_read, tokens_cache_creation")
+    .gte("created_at", since)
+    .not("tokens_input", "is", null)
+    .limit(5000);
+  const costEstimate = estimateClaudeCost(usageRows || []);
+
   const { data: recent } = await supabase
     .from("conversations")
     .select("id, status, last_message_at, message_count, subscribers(full_name, platform)")
@@ -39,6 +48,41 @@ export default async function DashboardPage() {
         <StatCard label="Mensajes" value={msgCount ?? 0} />
         <StatCard label="Handoffs sin resolver" value={handoffCount ?? 0} highlight={(handoffCount ?? 0) > 0} />
         <StatCard label="Learnings pendientes" value={pendingLearnings ?? 0} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-normal text-muted-foreground">
+              Costo Claude estimado
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-semibold">{formatUsd(costEstimate.estimatedUsd)}</div>
+            <div className="text-xs text-muted-foreground mt-1">Últimos 7 días · solo mensajes con tokens</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-normal text-muted-foreground">Tokens usados</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-semibold">{formatCompactNumber(costEstimate.totalTokens)}</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              In {formatCompactNumber(costEstimate.inputTokens)} · Out{" "}
+              {formatCompactNumber(costEstimate.outputTokens)}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-normal text-muted-foreground">Cache read</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-semibold">{formatCompactNumber(costEstimate.cacheReadTokens)}</div>
+            <div className="text-xs text-muted-foreground mt-1">Ahorro aproximado por prompt caching</div>
+          </CardContent>
+        </Card>
       </div>
 
       <Card>

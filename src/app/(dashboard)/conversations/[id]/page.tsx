@@ -27,7 +27,7 @@ export default async function ConversationDetailPage({
 
   const { data: messages } = await supabase
     .from("messages")
-    .select("id, role, content, tool_input, created_at, latency_ms, model")
+    .select("id, role, content, tool_input, created_at, latency_ms, model, delivery_status, delivery_error")
     .eq("conversation_id", id)
     .order("created_at", { ascending: true });
 
@@ -63,7 +63,14 @@ export default async function ConversationDetailPage({
                   <div className="text-[10px] opacity-60 mt-1">
                     {formatRelative(m.created_at)}
                     {m.latency_ms ? ` · ${m.latency_ms}ms` : ""}
+                    {m.role === "assistant" && m.delivery_status ? ` · ${deliveryLabel(m.delivery_status)}` : ""}
                   </div>
+                  {m.role === "assistant" && m.delivery_status === "failed" && (
+                    <div className="mt-2 rounded-md bg-destructive/15 px-2 py-1 text-[11px] text-destructive">
+                      ManyChat no aceptó el envío
+                      {m.delivery_error ? `: ${m.delivery_error}` : ""}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -126,4 +133,14 @@ function Row({ label, value }: { label: string; value?: string }) {
       <span>{value || "—"}</span>
     </div>
   );
+}
+
+function deliveryLabel(status: string) {
+  const labels: Record<string, string> = {
+    delivered: "enviado",
+    failed: "falló envío",
+    pending: "pendiente",
+  };
+
+  return labels[status] || status;
 }

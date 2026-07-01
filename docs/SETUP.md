@@ -30,8 +30,11 @@ Settings → API:
 - Copy **service_role secret** → `SUPABASE_SERVICE_ROLE_KEY` ⚠️ never expose to browser
 - Copy the project ref (the part before `.supabase.co`) → `SUPABASE_PROJECT_ID`
 
-### 2b. Run the schema migration
-Database → SQL Editor → New query → paste the entire contents of `supabase/migrations/0001_initial_schema.sql` → **Run**.
+### 2b. Run the schema migrations
+Database → SQL Editor → New query → run every file in `supabase/migrations/` in numeric order:
+
+1. `0001_initial_schema.sql`
+2. `0002_message_delivery_status.sql`
 
 You should see "Success. No rows returned" — that's expected. It also seeds a default `meridian` brand.
 
@@ -95,6 +98,18 @@ MANYCHAT_WEBHOOK_SECRET=$(openssl rand -hex 32)
 ```
 Configure the same secret in ManyChat External Request settings (see `MANYCHAT_INTEGRATION.md`).
 
+Optional spend guard:
+```
+RATE_LIMIT_MESSAGES_PER_MINUTE=30
+```
+This ignores extra inbound messages above the limit for the same active conversation within one minute.
+
+Optional handoff tag:
+```env
+MANYCHAT_HANDOFF_TAG=needs_human
+```
+Create the same tag in ManyChat first. If left blank, handoffs still work, but the backend skips tagging the contact.
+
 ---
 
 ## 6. Telegram bot (optional — for handoff alerts)
@@ -119,6 +134,16 @@ Configure the same secret in ManyChat External Request settings (see `MANYCHAT_I
 openssl rand -hex 32
 ```
 Set `CRON_SECRET=<the value>` in `.env.local`.
+
+### Optional callback booking link
+
+If you use Cal.com or another booking page, set:
+
+```env
+CALLBACK_BOOKING_URL=https://cal.com/your-team/meridian-call
+```
+
+When Claude uses `schedule_callback`, the AI sends this link with UTM parameters and logs a `callback_requested` lead event. If this env var is empty, callback requests become human handoffs instead.
 
 ---
 
@@ -159,6 +184,43 @@ Or use the UI: `/knowledge-base` → upload via the form.
 
 Verify in Supabase: `select count(*) from document_chunks;` should return > 0.
 
+### Scanned PDFs / OCR
+
+Normal PDFs are parsed locally with `pdf-parse`. Scanned PDFs need OCR because they contain page images instead of selectable text.
+
+Configure an OCR service only if scanned PDFs must be ingested:
+
+```env
+OCR_HTTP_ENDPOINT=https://your-ocr-service.example.com/extract
+OCR_HTTP_TOKEN=optional-shared-secret
+```
+
+The OCR service contract is:
+
+```http
+POST /extract
+Authorization: Bearer <OCR_HTTP_TOKEN>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "filename": "scanned.pdf",
+  "mime_type": "application/pdf",
+  "file_base64": "..."
+}
+```
+
+Response:
+
+```json
+{ "text": "full extracted text here" }
+```
+
+If `OCR_HTTP_ENDPOINT` is not configured and a PDF has no extractable text, upload returns: `no text extracted; configure OCR_HTTP_ENDPOINT for scanned PDFs`.
+
 ---
 
 ## 10. Deploy to Vercel
@@ -190,7 +252,7 @@ See `docs/MANYCHAT_INTEGRATION.md` for the exact ManyChat flow config. Short ver
 2. URL: `https://meridian-engagement-ai.vercel.app/api/manychat/webhook`
 3. Method: POST
 4. Body: JSON with `manychat_page_id`, `subscriber_id`, `subscriber`, `message`, `platform`
-5. Header: `x-manychat-signature: {hmac-sha256 of body with MANYCHAT_WEBHOOK_SECRET}` (or skip in dev)
+5. Header: `jorai: <MANYCHAT_WEBHOOK_SECRET>`
 6. Save → Send Test
 
 ---

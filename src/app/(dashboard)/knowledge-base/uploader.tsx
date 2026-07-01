@@ -10,7 +10,7 @@ export function DocumentUploader({ brands }: { brands: Array<{ id: string; name:
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"idle" | "uploading" | "done" | "error">("idle");
-  const [result, setResult] = useState<{ chunks?: number; error?: string }>({});
+  const [result, setResult] = useState<{ chunks?: number; extraction_method?: string; error?: string }>({});
   const router = useRouter();
 
   async function submit(e: React.FormEvent) {
@@ -26,7 +26,7 @@ export function DocumentUploader({ brands }: { brands: Array<{ id: string; name:
     const data = await res.json();
     if (res.ok) {
       setStatus("done");
-      setResult({ chunks: data.chunks });
+      setResult({ chunks: data.chunks, extraction_method: data.extraction_method });
       setFile(null);
       setTitle("");
       router.refresh();
@@ -71,7 +71,10 @@ export function DocumentUploader({ brands }: { brands: Array<{ id: string; name:
         {status === "uploading" ? "Procesando..." : "Subir y procesar"}
       </Button>
       {status === "done" && (
-        <div className="text-sm text-emerald-700">✓ Procesado en {result.chunks} chunks.</div>
+        <div className="text-sm text-emerald-700">
+          ✓ Procesado en {result.chunks} chunks
+          {result.extraction_method === "ocr" ? " usando OCR." : "."}
+        </div>
       )}
       {status === "error" && <div className="text-sm text-destructive">Error: {result.error}</div>}
     </form>

@@ -9,12 +9,12 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "db:types": "supabase gen types typescript --project-id $SUPABASE_PROJECT_ID > src/types/database.ts",
-    "seed:meridian": "tsx scripts/seed-meridian-knowledge.ts"
+    "seed:meridian": "tsx scripts/seed-meridian-knowledge.ts",
+    "account:upsert": "tsx scripts/upsert-manychat-account.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^1.0.10",
     "@anthropic-ai/sdk": "^0.40.0",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.47.0",
     "@radix-ui/react-dialog": "^1.1.4",
     "@radix-ui/react-dropdown-menu": "^2.1.4",
     "@radix-ui/react-label": "^2.1.1",
@@ -22,8 +22,11 @@
     "@radix-ui/react-slot": "^1.1.1",
     "@radix-ui/react-tabs": "^1.1.2",
     "@radix-ui/react-toast": "^1.2.4",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.0",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.38.0",
     "ai": "^4.0.20",
-    "@ai-sdk/openai": "^1.0.10",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",

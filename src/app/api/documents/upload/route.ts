@@ -3,12 +3,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { extractPdfText, chunkText } from "@/lib/chunking/pdf";
 import { embedBatch } from "@/lib/ai/embeddings";
+import { extractTextWithOcr, isOcrConfigured } from "@/lib/ocr";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const EMBED_BATCH_SIZE = 50;
+const MIN_EXTRACTED_TEXT_CHARS = 50;
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -53,8 +55,26 @@ export async function POST(req: NextRequest) {
 
   // 2. Extract text (PDF for now; extend later)
   let text = "";
+  let extractionMethod: "native" | "ocr" = "native";
   if (ext === "pdf") {
     text = await extractPdfText(buffer);
+    if (text.trim().length < MIN_EXTRACTED_TEXT_CHARS && isOcrConfigured()) {
+      try {
+        const ocrText = await extractTextWithOcr({
+          buffer,
+          filename: file.name,
+          mimeType: file.type || "application/pdf",
+        });
+        if (ocrText.trim()) {
+          text = ocrText;
+          extractionMethod = "ocr";
+        }
+      } catch (e) {
+        console.error("[upload] OCR extraction failed", e);
+        const message = e instanceof Error ? e.message : String(e);
+        return NextResponse.json({ error: `OCR extraction failed: ${message}` }, { status: 502 });
+      }
+    }
   } else if (["txt", "md"].includes(ext)) {
     text = buffer.toString("utf-8");
   } else {
@@ -62,7 +82,14 @@ export async function POST(req: NextRequest) {
   }
 
   if (!text.trim()) {
-    return NextResponse.json({ error: "no text extracted" }, { status: 400 });
+    return NextResponse.json(
+      {
+        error: isOcrConfigured()
+          ? "no text extracted"
+          : "no text extracted; configure OCR_HTTP_ENDPOINT for scanned PDFs",
+      },
+      { status: 400 },
+    );
   }
 
   // 3. Chunk
@@ -77,6 +104,7 @@ export async function POST(req: NextRequest) {
       source_type: ext === "pdf" ? "pdf" : ext === "md" ? "md" : "txt",
       file_path: path,
       chunk_count: chunks.length,
+      metadata: { extraction_method: extractionMethod },
       created_by: user.id,
     })
     .select("id")
@@ -108,6 +136,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     document_id: doc.id,
     chunks: chunks.length,
+    extraction_method: extractionMethod,
     preview: text.slice(0, 300),
   });
 }

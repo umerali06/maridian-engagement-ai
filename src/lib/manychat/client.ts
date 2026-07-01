@@ -4,27 +4,53 @@
  */
 
 const API_BASE = "https://api.manychat.com";
+const SEND_RETRY_DELAYS_MS = [1000, 3000];
+const RESPONSE_WINDOW_MS = 24 * 3600 * 1000;
+
+export class OutOfMessagingWindowError extends Error {
+  constructor(lastInteractionAt: string) {
+    super(`Cannot send RESPONSE outside 24h messaging window: ${lastInteractionAt}`);
+    this.name = "OutOfMessagingWindowError";
+  }
+}
 
 export type ManyChatSendOptions = {
   apiKey: string;
   subscriberId: string;
+  platform?: string;
   text: string;
   messagingType?: "RESPONSE" | "UPDATE" | "MESSAGE_TAG";
   tag?: string;
+  lastInteractionAt?: string | null;
 };
 
 export async function sendTextMessage({
   apiKey,
   subscriberId,
+  platform = "instagram",
   text,
   messagingType = "RESPONSE",
   tag,
+  lastInteractionAt,
 }: ManyChatSendOptions) {
+  if (
+    messagingType === "RESPONSE" &&
+    lastInteractionAt &&
+    Date.now() - new Date(lastInteractionAt).getTime() > RESPONSE_WINDOW_MS
+  ) {
+    throw new OutOfMessagingWindowError(lastInteractionAt);
+  }
+
+  const contentType =
+    platform === "instagram" || platform === "facebook" || platform === "whatsapp"
+      ? platform
+      : "instagram";
   const body = {
     subscriber_id: subscriberId,
     data: {
       version: "v2",
       content: {
+        type: contentType,
         messages: [{ type: "text", text }],
       },
     },
@@ -32,7 +58,7 @@ export async function sendTextMessage({
     messaging_type: messagingType,
   };
 
-  const res = await fetch(`${API_BASE}/fb/sending/sendContent`, {
+  const res = await fetchWithRetry(`${API_BASE}/fb/sending/sendContent`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -46,6 +72,38 @@ export async function sendTextMessage({
     throw new Error(`ManyChat send failed (${res.status}): ${errText}`);
   }
   return res.json();
+}
+
+async function fetchWithRetry(url: string, init: RequestInit) {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= SEND_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if (!shouldRetryStatus(res.status) || attempt === SEND_RETRY_DELAYS_MS.length) {
+        return res;
+      }
+
+      await sleep(SEND_RETRY_DELAYS_MS[attempt]);
+    } catch (error) {
+      lastError = error;
+      if (attempt === SEND_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+
+      await sleep(SEND_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError;
+}
+
+function shouldRetryStatus(status: number) {
+  return status === 429 || status >= 500;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function setCustomFields(

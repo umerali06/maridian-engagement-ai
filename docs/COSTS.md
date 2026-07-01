@@ -52,6 +52,18 @@ After optimization (sensible default for Meridian):
 
 ## Where to watch costs
 
+### Dashboard estimate
+
+`/dashboard` shows a 7-day Claude estimate from stored `messages` token fields. It uses the same rough formula as the SQL below:
+
+```text
+((tokens_input - tokens_cache_read) × 3.00
+ + tokens_cache_read × 0.30
+ + tokens_output × 15.00) / 1,000,000
+```
+
+This is an operational estimate, not the billing source of truth. Anthropic billing remains authoritative, and the dashboard only includes messages where token usage was persisted.
+
 ### Anthropic
 - https://console.anthropic.com/settings/billing — daily usage chart
 - Set a **spend limit** under Settings → Limits

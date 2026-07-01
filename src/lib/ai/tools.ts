@@ -83,6 +83,35 @@ export const TOOLS: Anthropic.Messages.Tool[] = [
       required: ["intent_type", "score", "notes"],
     },
   },
+  {
+    name: "schedule_callback",
+    description:
+      "Ofrece agendar una llamada o callback cuando el usuario quiere hablar con el equipo, pero no es una queja ni un caso sensible que requiera handoff inmediato.",
+    input_schema: {
+      type: "object",
+      properties: {
+        preferred_time: {
+          type: "string",
+          description: "Horario preferido indicado por el usuario, ej: 'mañana en la tarde'.",
+        },
+        contact_method: {
+          type: "string",
+          enum: ["instagram", "whatsapp", "phone", "email"],
+          description: "Canal preferido para el callback.",
+        },
+        notes: {
+          type: "string",
+          description: "Resumen breve de qué quiere resolver en la llamada.",
+        },
+        message: {
+          type: "string",
+          description:
+            "Mensaje al usuario. Si hay link de agenda, usa el placeholder literal {LINK}.",
+        },
+      },
+      required: ["preferred_time", "contact_method", "notes", "message"],
+    },
+  },
 ];
 
 export function buildLandingUrl(
@@ -104,5 +133,18 @@ export function buildLandingUrl(
   u.searchParams.set("utm_campaign", utm_campaign);
   if (utm_content) u.searchParams.set("utm_content", utm_content);
   u.searchParams.set("utm_term", persona);
+  return u.toString();
+}
+
+export function buildShortLandingUrl(
+  appUrl: string,
+  persona: string,
+  utm_campaign: string,
+  utm_content?: string,
+): string {
+  const u = new URL("/r", appUrl);
+  u.searchParams.set("persona", persona);
+  u.searchParams.set("utm_campaign", utm_campaign);
+  if (utm_content) u.searchParams.set("utm_content", utm_content);
   return u.toString();
 }

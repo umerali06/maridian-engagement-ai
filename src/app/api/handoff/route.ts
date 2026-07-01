@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -26,8 +27,10 @@ export async function POST(req: NextRequest) {
     .single();
   if (error || !conv) return NextResponse.json({ error: "not found" }, { status: 404 });
 
+  const admin = createAdminClient();
+
   if (action === "takeover") {
-    await supabase
+    const { error: updateErr } = await admin
       .from("conversations")
       .update({
         status: "handed_off",
@@ -35,14 +38,23 @@ export async function POST(req: NextRequest) {
         handed_off_to: user.email,
       })
       .eq("id", conversation_id);
-    await supabase.from("handoffs").insert({
+    if (updateErr) {
+      console.error("[handoff] takeover update failed", updateErr);
+      return NextResponse.json({ error: updateErr.message }, { status: 500 });
+    }
+
+    const { error: insertErr } = await admin.from("handoffs").insert({
       conversation_id,
       brand_id: conv.brand_id,
       reason: notes || "manual takeover",
       triggered_by: "manual",
     });
+    if (insertErr) {
+      console.error("[handoff] takeover insert failed", insertErr);
+      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+    }
   } else if (action === "resolve") {
-    await supabase
+    const { error: handoffErr } = await admin
       .from("handoffs")
       .update({
         resolved: true,
@@ -52,12 +64,28 @@ export async function POST(req: NextRequest) {
       })
       .eq("conversation_id", conversation_id)
       .eq("resolved", false);
-    await supabase.from("conversations").update({ status: "closed" }).eq("id", conversation_id);
+    if (handoffErr) {
+      console.error("[handoff] resolve handoff update failed", handoffErr);
+      return NextResponse.json({ error: handoffErr.message }, { status: 500 });
+    }
+
+    const { error: closeErr } = await admin
+      .from("conversations")
+      .update({ status: "closed" })
+      .eq("id", conversation_id);
+    if (closeErr) {
+      console.error("[handoff] resolve conversation update failed", closeErr);
+      return NextResponse.json({ error: closeErr.message }, { status: 500 });
+    }
   } else if (action === "return_to_ai") {
-    await supabase
+    const { error: returnErr } = await admin
       .from("conversations")
       .update({ status: "active", handoff_reason: null, handed_off_at: null, handed_off_to: null })
       .eq("id", conversation_id);
+    if (returnErr) {
+      console.error("[handoff] return_to_ai update failed", returnErr);
+      return NextResponse.json({ error: returnErr.message }, { status: 500 });
+    }
   } else {
     return NextResponse.json({ error: "invalid action" }, { status: 400 });
   }

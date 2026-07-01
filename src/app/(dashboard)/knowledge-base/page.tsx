@@ -21,7 +21,7 @@ export default async function KnowledgeBasePage() {
       <div>
         <h1 className="text-2xl font-semibold">Knowledge Base</h1>
         <p className="text-sm text-muted-foreground">
-          Sube PDFs, markdown o txt. Se trocean en ~800 tokens y se embeben para RAG.
+          Sube PDFs, markdown o txt. Si un PDF escaneado no tiene texto seleccionable, se usa OCR cuando está configurado.
         </p>
       </div>
 
