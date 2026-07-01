@@ -96,7 +96,7 @@ async function processChat(
   // Load brand + applied learnings
   const { data: brand } = await supabase
     .from("brands")
-    .select("name, system_prompt, voice_guidelines, mandatory_disclaimer, landing_base_url, rag_threshold, rag_top_k")
+    .select("name, system_prompt, voice_guidelines, mandatory_disclaimer, landing_base_url, rag_threshold, rag_top_k, fallback_handoff_message, fallback_landing_message_template, fallback_callback_message_template, fallback_callback_handoff_message, dedup_variants")
     .eq("id", body.brand_id)
     .single();
   if (!brand) {
@@ -219,7 +219,12 @@ async function processChat(
       : undefined;
   const dedupedReply = replyIsFromTool
     ? reply
-    : await avoidDuplicateReply(supabase, body.conversation_id, reply);
+    : await avoidDuplicateReply(
+        supabase,
+        body.conversation_id,
+        reply,
+        brand.dedup_variants,
+      );
   const replyToSend = debugSuffix ? `${dedupedReply} ${debugSuffix}` : dedupedReply;
 
   // === Send to ManyChat ===
@@ -332,6 +337,7 @@ async function avoidDuplicateReply(
   supabase: any,
   conversationId: string,
   reply: string,
+  variants: string[] | null,
 ) {
   const { data: lastAssistant } = await supabase
     .from("messages")
@@ -346,13 +352,18 @@ async function avoidDuplicateReply(
     return reply;
   }
 
-  const variants = [
-    "Si no te abre, te lo vuelvo a pasar.",
-    "Si te atoras en el proceso, me dices.",
-    "Si quieres, te explico cuál te conviene.",
-  ];
-  const index = Math.abs(hashString(conversationId + reply + Date.now().toString())) % variants.length;
-  return `${reply} ${variants[index]}`;
+  const activeVariants =
+    variants && variants.length > 0
+      ? variants
+      : [
+          "Si no te abre, te lo vuelvo a pasar.",
+          "Si te atoras en el proceso, me dices.",
+          "Si quieres, te explico cuál te conviene.",
+        ];
+  const index =
+    Math.abs(hashString(conversationId + reply + Date.now().toString())) %
+    activeVariants.length;
+  return `${reply} ${activeVariants[index]}`;
 }
 
 function hashString(value: string) {
@@ -389,7 +400,15 @@ function coalesceMessages(
 // Tool executor
 // =========================================================================
 type ToolCtx = ChatRequest & {
-  brand: { name: string; landing_base_url: string | null };
+  brand: {
+    name: string;
+    landing_base_url: string | null;
+    fallback_handoff_message: string | null;
+    fallback_landing_message_template: string | null;
+    fallback_callback_message_template: string | null;
+    fallback_callback_handoff_message: string | null;
+    dedup_variants: string[] | null;
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any;
 };
@@ -403,7 +422,11 @@ async function executeTool(
     case "handoff_to_human": {
       const reason = String(input.reason);
       const urgency = String(input.urgency || "normal");
-      const userMsg = String(input.user_message_to_send || "Te conecto con alguien del equipo 🙌");
+      const userMsg = String(
+        input.user_message_to_send ||
+          ctx.brand.fallback_handoff_message ||
+          "Te conecto con alguien del equipo 🙌",
+      );
       const handoffTag = process.env.MANYCHAT_HANDOFF_TAG?.trim();
 
       await ctx.supabase
@@ -458,7 +481,11 @@ async function executeTool(
       const persona = String(input.persona || "general");
       const utm_campaign = String(input.utm_campaign || "manychat_dm");
       const utm_content = input.utm_content ? String(input.utm_content) : undefined;
-      const messageTemplate = String(input.message || "Aquí tienes 👉 {LINK}");
+      const messageTemplate = String(
+        input.message ||
+          ctx.brand.fallback_landing_message_template ||
+          "Aquí tienes 👉 {LINK}",
+      );
 
       const base = ctx.brand.landing_base_url || process.env.NEXT_PUBLIC_LANDING_BASE_URL!;
       const destinationUrl = buildLandingUrl(base, persona, utm_campaign, utm_content);
@@ -533,7 +560,9 @@ async function executeTool(
       const contactMethod = String(input.contact_method || "instagram");
       const notes = String(input.notes || "");
       const messageTemplate = String(
-        input.message || "Agenda aquí y el equipo te da seguimiento: {LINK}",
+        input.message ||
+          ctx.brand.fallback_callback_message_template ||
+          "Agenda aquí y el equipo te da seguimiento: {LINK}",
       );
       const bookingUrl = process.env.CALLBACK_BOOKING_URL;
 
@@ -589,6 +618,7 @@ async function executeTool(
       return {
         result: { ok: true, handed_off: true },
         replyOverride:
+          ctx.brand.fallback_callback_handoff_message ||
           "Te conecto con alguien del equipo para coordinar la llamada. Te responden por aquí en breve 🤝",
       };
     }
