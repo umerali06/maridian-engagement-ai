@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse, after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { normalizeWebhookPayload, type ManyChatWebhookPayload } from "@/lib/manychat/types";
+import { sendTelegram } from "@/lib/telegram";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -132,14 +133,14 @@ export async function POST(req: NextRequest) {
   }
 
   if (process.env.UPSTASH_REDIS_REST_URL) {
-    const { perSubscriberLimit, perIpLimit } = await import("@/lib/ratelimit");
+    const { getPerSubscriberLimit, getPerIpLimit } = await import("@/lib/ratelimit");
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
     const [subLim, ipLim] = await Promise.all([
-      perSubscriberLimit.limit(subscriber_id),
-      perIpLimit.limit(ip),
+      getPerSubscriberLimit().limit(subscriber_id),
+      getPerIpLimit().limit(ip),
     ]);
     if (!subLim.success || !ipLim.success) {
-      return NextResponse.json({ ok: true, rate_limited: true }, { status: 429 });
+      return NextResponse.json({ ok: true, rate_limited: true });
     }
   }
 
@@ -220,15 +221,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "message insert failed" }, { status: 500 });
   }
 
-  // 5. Check if conversation is handed off — if so, do nothing (humans took over)
+  // 5. Check if conversation is handed off — if so, do nothing but ping the team.
   const { data: convStatus } = await supabase
     .from("conversations")
-    .select("status")
+    .select("status, handed_off_at")
     .eq("id", conversationId)
     .single();
 
   if (convStatus?.status === "handed_off") {
-    // ManyChat will keep the convo silent for AI; humans handle via Live Chat there
+    // Rate-limit the alert to at most one every 5 minutes per conversation to avoid Telegram spam.
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { count: recentAlerts } = await supabase
+      .from("handoff_alerts")
+      .select("id", { count: "exact", head: true })
+      .eq("conversation_id", conversationId)
+      .gte("created_at", fiveMinAgo);
+
+    if ((recentAlerts || 0) === 0) {
+      const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL}/conversations/${conversationId}`;
+      after(async () => {
+        try {
+          await sendTelegram(
+            `💬 *Nuevo mensaje en conversación en handoff*\n[Abrir conversación](${dashboardUrl})\nMensaje: ${message_text.slice(0, 200)}`,
+          );
+          await supabase.from("handoff_alerts").insert({ conversation_id: conversationId });
+        } catch (e) {
+          console.error("[webhook] handoff alert failed", e);
+        }
+      });
+    }
+
     return NextResponse.json({ ok: true, skipped: "handed_off" });
   }
 

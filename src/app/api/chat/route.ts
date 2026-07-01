@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { NextRequest, NextResponse, after } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL_BRAIN } from "@/lib/ai/claude";
 import { retrieve, formatChunksAsContext } from "@/lib/ai/rag";
@@ -10,7 +11,7 @@ import {
   addTag,
   setCustomFields,
 } from "@/lib/manychat/client";
-import { sendTelegram } from "@/lib/telegram";
+import { sendSupervisorReview, sendTelegram } from "@/lib/telegram";
 import type Anthropic from "@anthropic-ai/sdk";
 
 export const runtime = "nodejs";
@@ -50,8 +51,30 @@ export async function POST(req: NextRequest) {
 
   const locked = await tryAcquireConversationLock(supabase, body.conversation_id);
   if (!locked) {
-    console.warn("[chat] conversation lock busy", body.conversation_id);
-    return NextResponse.json({ ok: true, skipped: "conversation_locked" }, { status: 202 });
+    // Requeue rather than drop. The next call has a fresh 2s lock wait window.
+    const retryCount = Number(req.headers.get("x-chat-retry") || 0);
+    if (retryCount >= 3) {
+      console.warn("[chat] conversation lock still busy after retries", body.conversation_id);
+      return NextResponse.json({ ok: true, skipped: "conversation_locked" });
+    }
+    const chatUrl = new URL(req.url);
+    after(async () => {
+      try {
+        await new Promise((r) => setTimeout(r, 5000 * (retryCount + 1)));
+        await fetch(chatUrl.toString(), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-secret": process.env.INTERNAL_API_SECRET || "",
+            "x-chat-retry": String(retryCount + 1),
+          },
+          body: JSON.stringify(body),
+        });
+      } catch (e) {
+        console.error("[chat] requeue failed", e);
+      }
+    });
+    return NextResponse.json({ ok: true, queued: true, retry: retryCount + 1 });
   }
 
   try {
@@ -97,14 +120,15 @@ async function processChat(
   const ragContext = formatChunksAsContext(chunks);
 
   // History excluding the inbound message being processed; we re-add it explicitly with RAG context.
+  // Fetch newest first so long conversations still surface the most recent context, then reverse for chronological order.
   const { data: history } = await supabase
     .from("messages")
     .select("id, role, content, tool_name, tool_input, tool_result")
     .eq("conversation_id", body.conversation_id)
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
     .limit(HISTORY_LIMIT + 1);
 
-  const allHistory = (history || []) as HistoryTurn[];
+  const allHistory = ((history || []) as HistoryTurn[]).slice().reverse();
   const currentMessageIndex = body.message_id
     ? allHistory.findIndex((m) => m.id === body.message_id)
     : -1;
@@ -128,6 +152,7 @@ async function processChat(
 
   // === Claude loop with tool execution ===
   let reply = "";
+  let replyIsFromTool = false;
   let totalUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
   const toolActions: Array<{ name: string; input: unknown; result: unknown }> = [];
 
@@ -162,7 +187,10 @@ async function processChat(
           tool_use_id: tu.id,
           content: JSON.stringify(result),
         });
-        if (replyOverride) reply = replyOverride;
+        if (replyOverride) {
+          reply = replyOverride;
+          replyIsFromTool = true;
+        }
       }
       messages.push({ role: "user", content: toolResults });
 
@@ -185,8 +213,13 @@ async function processChat(
     return NextResponse.json({ ok: true, skipped: "empty_reply" });
   }
 
-  const debugSuffix = process.env.REPLY_DEBUG_SUFFIX?.trim();
-  const dedupedReply = await avoidDuplicateReply(supabase, body.conversation_id, reply);
+  const debugSuffix =
+    process.env.NODE_ENV !== "production"
+      ? process.env.REPLY_DEBUG_SUFFIX?.trim()
+      : undefined;
+  const dedupedReply = replyIsFromTool
+    ? reply
+    : await avoidDuplicateReply(supabase, body.conversation_id, reply);
   const replyToSend = debugSuffix ? `${dedupedReply} ${debugSuffix}` : dedupedReply;
 
   // === Send to ManyChat ===
@@ -206,6 +239,31 @@ async function processChat(
       const wordCount = reply.split(/\s+/).filter(Boolean).length;
       const typingDelayMs = Math.min(15000, 1500 + wordCount * 300);
       await new Promise((r) => setTimeout(r, typingDelayMs));
+    }
+
+    if (process.env.SUPERVISOR_MODE === "true") {
+      await sendSupervisorReview({
+        conversationId: body.conversation_id,
+        brandName: brand.name,
+        userMessage: body.user_message,
+        draftReply: replyToSend,
+      });
+      await supabase.from("messages").insert({
+        conversation_id: body.conversation_id,
+        brand_id: body.brand_id,
+        role: "assistant",
+        content: replyToSend,
+        tokens_input: totalUsage.input,
+        tokens_output: totalUsage.output,
+        tokens_cache_read: totalUsage.cacheRead,
+        tokens_cache_creation: totalUsage.cacheCreate,
+        latency_ms: Date.now() - t0,
+        model: MODEL_BRAIN,
+        delivery_status: "pending",
+        delivery_error: null,
+        delivered_at: null,
+      });
+      return NextResponse.json({ ok: true, supervisor_mode: true });
     }
 
     deliveryResponse = await sendTextMessage({
@@ -379,7 +437,18 @@ async function executeTool(
           console.error(`[tool handoff] addTag failed for tag "${handoffTag}"`, e);
         }
       } else {
-        console.warn("[tool handoff] MANYCHAT_HANDOFF_TAG not configured; skipping addTag");
+        console.warn("[tool handoff] MANYCHAT_HANDOFF_TAG not configured; falling back to custom field");
+      }
+
+      // Always mirror handoff state to a custom field so Live Chat operators can filter.
+      try {
+        await setCustomFields(ctx.manychat_api_key, ctx.manychat_subscriber_id, {
+          handoff_status: "pending",
+          handoff_reason: reason.slice(0, 200),
+          handoff_urgency: urgency,
+        });
+      } catch (e) {
+        console.error("[tool handoff] setCustomFields failed", e);
       }
 
       return { result: { ok: true }, replyOverride: userMsg };
@@ -394,7 +463,17 @@ async function executeTool(
       const base = ctx.brand.landing_base_url || process.env.NEXT_PUBLIC_LANDING_BASE_URL!;
       const destinationUrl = buildLandingUrl(base, persona, utm_campaign, utm_content);
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || base;
-      const shortUrl = buildShortLandingUrl(appUrl, persona, utm_campaign, utm_content);
+      const nonce = randomUUID();
+      await ctx.supabase.from("short_link_nonces").insert({
+        nonce,
+        brand_id: ctx.brand_id,
+        subscriber_id: ctx.subscriber_id,
+        conversation_id: ctx.conversation_id,
+        persona,
+        utm_campaign,
+        utm_content,
+      });
+      const shortUrl = buildShortLandingUrl(appUrl, nonce);
       const finalMsg = messageTemplate.replace("{LINK}", shortUrl);
 
       await ctx.supabase.from("lead_events").insert({

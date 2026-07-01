@@ -138,13 +138,9 @@ export function buildLandingUrl(
 
 export function buildShortLandingUrl(
   appUrl: string,
-  persona: string,
-  utm_campaign: string,
-  utm_content?: string,
+  nonce: string,
 ): string {
   const u = new URL("/r", appUrl);
-  u.searchParams.set("persona", persona);
-  u.searchParams.set("utm_campaign", utm_campaign);
-  if (utm_content) u.searchParams.set("utm_content", utm_content);
+  u.searchParams.set("n", nonce);
   return u.toString();
 }

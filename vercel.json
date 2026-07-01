@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/learning-loop",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/dedup-cleanup",
+      "schedule": "0 5 * * *"
     }
   ],
   "functions": {

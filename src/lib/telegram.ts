@@ -26,3 +26,14 @@ export async function sendTelegram(
     console.error("[telegram] send failed", res.status, await res.text());
   }
 }
+
+export async function sendSupervisorReview(payload: {
+  conversationId: string;
+  brandName: string;
+  userMessage: string;
+  draftReply: string;
+}) {
+  await sendTelegram(
+    `🧪 *Supervisor mode*\n*${payload.brandName}*\nconversation_id: ${payload.conversationId}\n\n*Usuario:*\n${payload.userMessage}\n\n*Borrador IA:*\n${payload.draftReply}\n\nNo se envió ningún mensaje a ManyChat.`,
+  );
+}
